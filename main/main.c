@@ -11,6 +11,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "driver/gpio.h"
+#include "esp_sleep.h"
 
 #define BTN1 GPIO_NUM_19
 #define BTN2 GPIO_NUM_21
@@ -39,6 +40,7 @@ xQueueHandle BTN3Queue;
 bool isLed_menu = true;
 bool isLed_setup = false;
 bool isLed_walk = false;
+bool long_press_detected = false;
 
 
 uint64_t btn1pre_time = 0;
@@ -61,6 +63,13 @@ uint64_t btn3curr_time = 0;
 int menu_cursor=0;
 int setup_cursor=0;
 
+
+void enter_deep_sleep() {
+    ESP_LOGI("NO TAG", "Entering deep sleep in 500ms");
+    vTaskDelay(500 / portTICK_PERIOD_MS); // Wait for 500ms to ensure button is released
+    esp_sleep_enable_ext0_wakeup(BTN2, 0); // Wake up when button is pressed (falling edge)
+    esp_deep_sleep_start();
+}
 
 
 static void led_menu()
@@ -522,6 +531,78 @@ void BTN1Task(void *params)
     }
 }
 
+// void BTN2Task(void *params)
+// {
+//     gpio_set_direction(BTN2, GPIO_MODE_INPUT);
+//     gpio_set_intr_type(BTN2, GPIO_INTR_NEGEDGE);
+//     int BTN_NUMBER = 0;
+//     gpio_set_direction(LED_BLUE1, GPIO_MODE_OUTPUT);
+//     gpio_set_direction(LED_BLUE2, GPIO_MODE_OUTPUT);
+//     while (1)
+//     {
+//         if (xQueueReceive(BTN2Queue, &BTN_NUMBER, portMAX_DELAY))
+//         {
+//             long_press_detected = false; 
+//             // Wait for button release
+//             while (gpio_get_level(BTN2) == 0 && !long_press_detected)
+//             {
+//                 btn2curr_time = esp_timer_get_time();
+          
+
+//         if (btn2curr_time - btn2intr_time >= 1000000) // Check for long press duration
+//                 {
+//                     ESP_LOGI("NO TAG", "Long Press Detected");
+//                     long_press_detected = true; // Set long press flag
+
+//                 }
+
+//             // Check if the button was pressed for a short duration
+//             if (btn2curr_time - btn2intr_time < 1000000) // Adjust the time threshold for short press detection as needed
+//             {
+//                 ESP_LOGI("NO TAG", "Short Press Detected on BTN2");
+//                 long_press_detected = true;
+//                 if(isLed_menu && menu_cursor==0)
+//                 {
+//                     isLed_menu = false;
+//                     isLed_setup = true;
+//                     gpio_set_level(LED_BLUE1, 1);
+//                     vTaskDelay(100/portTICK_PERIOD_MS);
+//                     led_setup();
+//                 }
+
+//                 else if(isLed_menu && menu_cursor == 1)
+//                 {
+//                      gpio_set_level(LED_BLUE2, 1);
+//                      vTaskDelay(100/portTICK_PERIOD_MS);
+//                      led_walk();
+//                 }
+//                 else if(isLed_setup)
+//                 {
+//                     isLed_menu = true;
+//                     isLed_setup = false;
+//                     gpio_set_level(LED_BLUE1, 1);
+//                     vTaskDelay(100/portTICK_PERIOD_MS);
+//                     led_menu();
+//                 }
+
+//                 else if(isLed_walk)
+//                 {
+                    
+//                     gpio_set_level(LED_BLUE2, 1);
+//                     vTaskDelay(100/portTICK_PERIOD_MS);
+//                     led_menu();
+//                 }
+//             }
+
+//           }
+
+//             xQueueReset(BTN2Queue);
+//         }
+//     }
+// }
+
+
+
 void BTN2Task(void *params)
 {
     gpio_set_direction(BTN2, GPIO_MODE_INPUT);
@@ -529,57 +610,69 @@ void BTN2Task(void *params)
     int BTN_NUMBER = 0;
     gpio_set_direction(LED_BLUE1, GPIO_MODE_OUTPUT);
     gpio_set_direction(LED_BLUE2, GPIO_MODE_OUTPUT);
+
     while (1)
     {
         if (xQueueReceive(BTN2Queue, &BTN_NUMBER, portMAX_DELAY))
         {
-            // Wait for button release
+            long_press_detected = false; 
+            btn2intr_time = esp_timer_get_time();  // Record the interrupt time
+            
+            // Wait for button release or long press detection
             while (gpio_get_level(BTN2) == 0)
             {
                 btn2curr_time = esp_timer_get_time();
+
+                // Check for long press duration
+                if (btn2curr_time - btn2intr_time >= 1000000) // 1 second threshold for long press
+                {
+                    ESP_LOGI("NO TAG", "Long Press Detected on BTN2");
+                    long_press_detected = true; // Set long press flag
+                    enter_deep_sleep(); 
+                    break; // Exit loop after long press is detected
+                }
             }
 
-            // Check if the button was pressed for a short duration
-            if (btn2curr_time - btn2intr_time < 1000000) // Adjust the time threshold for short press detection as needed
+            // Check if the button was released for a short press duration
+            if (!long_press_detected && (btn2curr_time - btn2intr_time < 1000000))
             {
                 ESP_LOGI("NO TAG", "Short Press Detected on BTN2");
-                if(isLed_menu && menu_cursor==0)
+
+                if (isLed_menu && menu_cursor == 0)
                 {
                     isLed_menu = false;
                     isLed_setup = true;
                     gpio_set_level(LED_BLUE1, 1);
-                    vTaskDelay(100/portTICK_PERIOD_MS);
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     led_setup();
                 }
-
-                else if(isLed_menu && menu_cursor == 1)
+                else if (isLed_menu && menu_cursor == 1)
                 {
-                     gpio_set_level(LED_BLUE2, 1);
-                     vTaskDelay(100/portTICK_PERIOD_MS);
-                     led_walk();
+                    gpio_set_level(LED_BLUE2, 1);
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                    led_walk();
                 }
-                else if(isLed_setup)
+                else if (isLed_setup)
                 {
                     isLed_menu = true;
                     isLed_setup = false;
                     gpio_set_level(LED_BLUE1, 1);
-                    vTaskDelay(100/portTICK_PERIOD_MS);
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     led_menu();
                 }
-
-                else if(isLed_walk)
+                else if (isLed_walk)
                 {
-                    
                     gpio_set_level(LED_BLUE2, 1);
-                    vTaskDelay(100/portTICK_PERIOD_MS);
+                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     led_menu();
                 }
             }
 
-            xQueueReset(BTN2Queue);
+            xQueueReset(BTN2Queue); // Reset the queue after processing
         }
     }
 }
+
 
 void BTN3Task(void *params)
 {
