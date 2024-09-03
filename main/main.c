@@ -32,6 +32,9 @@
 #define RGB_GREEN 16
 #define RGB_BLUE 17
 
+#define FADE_DELAY 10         // Delay in milliseconds between each step
+#define FADE_STEPS 100 
+
 xQueueHandle BTN1Queue;
 xQueueHandle BTN2Queue;
 xQueueHandle BTN3Queue;
@@ -39,7 +42,7 @@ xQueueHandle BTN3Queue;
 
 bool isLed_menu = true;
 bool isLed_setup = false;
-bool isLed_walk = false;
+bool isLed_walk = false;   
 bool long_press_detected = false;
 
 
@@ -64,12 +67,17 @@ int menu_cursor=0;
 int setup_cursor=0;
 
 
+
+
 void enter_deep_sleep() {
     ESP_LOGI("NO TAG", "Entering deep sleep in 500ms");
     vTaskDelay(500 / portTICK_PERIOD_MS); // Wait for 500ms to ensure button is released
     esp_sleep_enable_ext0_wakeup(BTN2, 0); // Wake up when button is pressed (falling edge)
     esp_deep_sleep_start();
 }
+
+
+
 
 
 static void led_menu()
@@ -228,8 +236,7 @@ static void led_setup()
     gpio_set_direction(SEG_F_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(SEG_G_GPIO, GPIO_MODE_OUTPUT);
     
-    // Ensure both blue LEDs are off during setup mode
-    gpio_set_level(LED_BLUE1, 0);
+
 
     printf("Setup cursor %d\n", setup_cursor);
 
@@ -247,8 +254,9 @@ static void led_walk()
     gpio_set_direction(SEG_E_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(SEG_F_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(SEG_G_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LED_BLUE2, GPIO_MODE_OUTPUT);
     printf("setup cursor %d\n",setup_cursor);
-    // vTaskDelay(100/portTICK_PERIOD_MS);
+
     gpio_set_level(LED_BLUE2, 0);
     switch (setup_cursor)
     {
@@ -349,6 +357,35 @@ static void led_walk()
         
     }
 
+}
+
+void Fading_Task(void *params)
+{
+    while(1)
+    {
+        if(isLed_menu && menu_cursor ==0)
+        {
+            gpio_set_level(LED_BLUE1,0);
+            vTaskDelay(500/portTICK_PERIOD_MS);
+            gpio_set_level(LED_BLUE1,1);
+        }
+        else if (isLed_menu && menu_cursor ==1)
+        {
+            gpio_set_level(LED_BLUE2,0);
+            vTaskDelay(500/portTICK_PERIOD_MS);
+            gpio_set_level(LED_BLUE2,1);
+        }
+
+        else if(isLed_setup)
+        {
+            gpio_set_level(LED_BLUE1, 0);
+        }
+        else if(isLed_walk)
+        {
+            gpio_set_level(LED_BLUE2, 0);
+        }
+        vTaskDelay(100/portTICK_PERIOD_MS);
+    }
 }
 
 void Blink_Task(void *params)
@@ -459,28 +496,23 @@ void BTN2Task(void *params)
                 {
                     isLed_menu = false;
                     isLed_setup = true;
-                    gpio_set_level(LED_BLUE1, 1);
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                    
                     led_setup();
                 }
                 else if (isLed_menu && menu_cursor == 1)
                 {
-                    gpio_set_level(LED_BLUE2, 1);
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
+                    isLed_menu = false;
+                    isLed_walk = true;
                     led_walk();
                 }
                 else if (isLed_setup)
                 {
                     isLed_menu = true;
                     isLed_setup = false;
-                    gpio_set_level(LED_BLUE1, 1);
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     led_menu();
                 }
                 else if (isLed_walk)
                 {
-                    gpio_set_level(LED_BLUE2, 1);
-                    vTaskDelay(100 / portTICK_PERIOD_MS);
                     led_menu();
                 }
             }
@@ -585,6 +617,7 @@ void app_main(void)
     xTaskCreate(BTN2Task, "BTN2_Task", 2048, NULL, 1, NULL);
     xTaskCreate(BTN3Task, "BTN3_Task", 2048, NULL, 1, NULL);
     xTaskCreate(Blink_Task, "Blink_Task", 2048, NULL, 1, NULL);
+    xTaskCreate(Fading_Task, "Fading_Task", 2048, NULL, 1, NULL);
 
     led_menu();
 }
