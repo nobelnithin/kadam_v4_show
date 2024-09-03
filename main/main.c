@@ -12,10 +12,21 @@
 #include "esp_log.h"
 #include "driver/gpio.h"
 #include "esp_sleep.h"
+#include "driver/adc.h"
+#include "driver/ledc.h"
+#include "esp_adc_cal.h"
+
+#define ADC_CHANNEL ADC1_CHANNEL_6  // GPIO14 if using ADC1 channel 6
+#define DEFAULT_VREF 3300           // Default reference voltage in mV
+#define NO_OF_SAMPLES 64            // Multisampling
 
 #define BTN1 GPIO_NUM_19
 #define BTN2 GPIO_NUM_21
 #define BTN3 GPIO_NUM_18
+
+#define LED_R_GPIO 15
+#define LED_G_GPIO 16
+#define LED_B_GPIO 17
 
 #define SEG_A_GPIO 12
 #define SEG_B_GPIO 13
@@ -58,6 +69,8 @@ uint64_t btn3pre_time = 0;
 uint64_t btn3intr_time = 0;
 uint64_t btn3curr_time = 0;
 
+static esp_adc_cal_characteristics_t *adc_chars;
+
 // uint8_t pre_time_vbus_intr = 0;
 // uint8_t intr_time_vbus_intr = 0;
 // uint8_t curr_time_vbus_intr = 0;
@@ -66,7 +79,38 @@ uint64_t btn3curr_time = 0;
 int menu_cursor=0;
 int setup_cursor=0;
 
+void configure_adc() {
+    adc1_config_width(ADC_WIDTH_BIT_13);
+    adc1_config_channel_atten(ADC_CHANNEL, ADC_ATTEN_DB_11);  // For input voltage up to 3.3V
+    adc_chars = calloc(1, sizeof(esp_adc_cal_characteristics_t));
+    esp_adc_cal_characterize(ADC_UNIT_1, ADC_ATTEN_DB_11, ADC_WIDTH_BIT_13, DEFAULT_VREF, adc_chars);
+}
 
+uint32_t read_battery_voltage() {
+    uint32_t adc_reading = 0;
+    for (int i = 0; i < NO_OF_SAMPLES; i++) {
+        adc_reading += adc1_get_raw(ADC_CHANNEL);
+    }
+    adc_reading /= NO_OF_SAMPLES;
+    
+    // Convert ADC reading to voltage in mV
+    uint32_t voltage = esp_adc_cal_raw_to_voltage(adc_reading, adc_chars);
+    
+    // Battery voltage is twice the measured voltage
+    return voltage * 2;
+}
+
+void set_led_color(uint8_t red, uint8_t green, uint8_t blue) {
+    // Set PWM duty cycle for each LED color
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, red);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1, green);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_1);
+
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2, blue);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_2);
+}
 
 
 void enter_deep_sleep() {
@@ -85,8 +129,22 @@ static void led_menu()
     isLed_menu = true;
     isLed_setup = false;
     isLed_walk = false;
+        gpio_set_direction(SEG_A_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_B_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_C_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_D_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_E_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_F_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(SEG_G_GPIO, GPIO_MODE_OUTPUT);
     gpio_set_direction(LED_BLUE1, GPIO_MODE_OUTPUT);
     gpio_set_direction(LED_BLUE2, GPIO_MODE_OUTPUT);
+    gpio_set_level(SEG_A_GPIO, 0);
+    gpio_set_level(SEG_B_GPIO, 0);
+    gpio_set_level(SEG_C_GPIO, 0);
+    gpio_set_level(SEG_D_GPIO, 0);
+    gpio_set_level(SEG_E_GPIO, 0);
+    gpio_set_level(SEG_F_GPIO, 0);
+    gpio_set_level(SEG_G_GPIO, 1);
     if(menu_cursor==0)
     {
         gpio_set_level(LED_BLUE2, 1);
@@ -98,13 +156,7 @@ static void led_menu()
         gpio_set_level(LED_BLUE2, 0);
     }
 
-    gpio_set_level(SEG_A_GPIO, 0);
-    gpio_set_level(SEG_B_GPIO, 0);
-    gpio_set_level(SEG_C_GPIO, 0);
-    gpio_set_level(SEG_D_GPIO, 0);
-    gpio_set_level(SEG_E_GPIO, 0);
-    gpio_set_level(SEG_F_GPIO, 0);
-    gpio_set_level(SEG_G_GPIO, 0);
+
     // printf("menu cursor %d\n",menu_cursor);
 }
 
@@ -221,6 +273,9 @@ static void turn_off_segments()
     gpio_set_level(SEG_F_GPIO, 0);
     gpio_set_level(SEG_G_GPIO, 0);
 }
+
+
+
 
 static void led_setup()
 {
@@ -359,6 +414,38 @@ static void led_walk()
 
 }
 
+void Battery_Task(void *params)
+{
+        while (1) {
+                uint32_t batt_voltage = read_battery_voltage();  // in mV
+                float battery_percentage = (batt_voltage - 3000) / (4200 - 3000) * 100;
+           
+          if(isLed_menu)  {       
+    
+        printf("Battery %.2f\n",battery_percentage);
+
+        if (battery_percentage > 80.0) {
+            set_led_color(0, 255, 0);  // Solid green
+        } else if (battery_percentage > 50.0) {
+            set_led_color(0, 128, 0);  // Less green
+        } else if (battery_percentage > 25.0) {
+            set_led_color(128, 0, 0);  // Less red
+        } else {
+            set_led_color(255, 0, 0);  // Solid red
+        }
+
+}
+
+
+        else{
+            gpio_set_level(RGB_BLUE,0);
+            gpio_set_level(RGB_GREEN,0);
+            gpio_set_level(RGB_RED,0);
+        }
+        vTaskDelay(1000/portTICK_PERIOD_MS);
+    }
+}
+
 void Fading_Task(void *params)
 {
     while(1)
@@ -405,6 +492,18 @@ void Blink_Task(void *params)
     
             // Wait for a short period to create the blink effect
             vTaskDelay(500 / portTICK_PERIOD_MS);
+        }
+        else if(isLed_menu)
+        {
+                gpio_set_direction(LED_BLUE1, GPIO_MODE_OUTPUT);
+    gpio_set_direction(LED_BLUE2, GPIO_MODE_OUTPUT);
+    gpio_set_level(SEG_A_GPIO, 0);
+    gpio_set_level(SEG_B_GPIO, 0);
+    gpio_set_level(SEG_C_GPIO, 0);
+    gpio_set_level(SEG_D_GPIO, 0);
+    gpio_set_level(SEG_E_GPIO, 0);
+    gpio_set_level(SEG_F_GPIO, 0);
+    gpio_set_level(SEG_G_GPIO, 1);
         }
         vTaskDelay(100/portTICK_PERIOD_MS);
     }
@@ -604,6 +703,29 @@ static void IRAM_ATTR BTN3_interrupt_handler(void *args)
 
 void app_main(void)
 {
+
+        configure_adc();
+    ledc_timer_config_t ledc_timer = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .timer_num = LEDC_TIMER_0,
+        .duty_resolution = LEDC_TIMER_8_BIT,
+        .freq_hz = 5000,
+        .clk_cfg = LEDC_AUTO_CLK
+    };
+    ledc_timer_config(&ledc_timer);
+
+    // LED PWM channel configuration
+    ledc_channel_config_t ledc_channel = {
+        .speed_mode = LEDC_LOW_SPEED_MODE,
+        .channel    = LEDC_CHANNEL_0,
+        .timer_sel  = LEDC_TIMER_0,
+        .intr_type  = LEDC_INTR_DISABLE,
+        .gpio_num   = LED_R_GPIO,
+        .duty       = 0,
+        .hpoint     = 0
+    };
+    ledc_channel_config(&ledc_channel);
+
     BTN1Queue = xQueueCreate(10, sizeof(int));
     BTN2Queue = xQueueCreate(10, sizeof(int));
     BTN3Queue = xQueueCreate(10, sizeof(int));
@@ -618,6 +740,7 @@ void app_main(void)
     xTaskCreate(BTN3Task, "BTN3_Task", 2048, NULL, 1, NULL);
     xTaskCreate(Blink_Task, "Blink_Task", 2048, NULL, 1, NULL);
     xTaskCreate(Fading_Task, "Fading_Task", 2048, NULL, 1, NULL);
+    xTaskCreate(Battery_Task, "battery_Task", 2048, NULL, 1, NULL);
 
     led_menu();
 }
